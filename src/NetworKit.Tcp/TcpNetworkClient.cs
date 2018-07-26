@@ -4,6 +4,7 @@
     using NetworKit.Tcp.Utils;
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Net.Sockets;
     using System.Text;
     using System.Threading.Tasks;
@@ -25,7 +26,7 @@
         /// <summary>
         /// The server on which this instance is connected.
         /// </summary>
-        private TcpRemoteConnection Server { get; }
+        private TcpRemoteConnection Server { get; set; }
 
         /// <summary>
         /// The deletage executed when a new message is received.
@@ -43,6 +44,8 @@
 
         #endregion
 
+        #region public methods
+
         public async Task<string> ConnectAsync(string ipAddress, int port, MessageHandler onMessageReceived, string message)
         {
             if (this.IsConnected)
@@ -50,62 +53,187 @@
                 throw new AlreadyConnectedException();
             }
 
-            this.OnMessageReceived = onMessageReceived;
+            var server = new TcpClient();
 
             try
             {
-                await this.Server.
+                await server.ConnectAsync(ipAddress, port);
             }
-        }
+            catch (SocketException e)
+            {
+                // TODO : log exception
 
-        public Task DisconnectAsync(string justification)
-        {
-            throw new NotImplementedException();
+                server.Dispose();
+
+                throw new ConnectionFailedException(ConnectionFailedType.RemoteConnectionUnreachable);
+            }
+
+            this.Server = new TcpRemoteConnection(server, this);
+
+            this.OnMessageReceived = onMessageReceived;
+
+            var connectionRequest = new Message(NetworkCommand.ConnectionRequested, message);
+
+            await this.Server.SendAsync(connectionRequest);
+
+            var connectionResponse = await this.ReceiveMessageAsync(this.TcpConfiguration.ConnectionTimeout);
+
+            if (connectionResponse == null)
+            {
+                this.ResetConnection();
+                throw new ConnectionFailedException(ConnectionFailedType.Timeout);
+            }
+            else if (!connectionResponse.IsValid)
+            {
+                this.ResetConnection();
+                throw new ConnectionFailedException(ConnectionFailedType.InvalidResponse);
+            }
+            else if (connectionResponse.Command == NetworkCommand.ConnectionFailed)
+            {
+                this.ResetConnection();
+                throw new ConnectionFailedException(ConnectionFailedType.ConnectionRefused);
+            }
+            else if (connectionResponse.Command != NetworkCommand.ConnectionGranted)
+            {
+                this.ResetConnection();
+                throw new ConnectionFailedException(ConnectionFailedType.Other);
+            }
+
+            this.ListeningAsync();
+
+            return connectionResponse.InnerMessage;
         }
 
         public Task SendAsync(string message)
         {
-            throw new NotImplementedException();
+            if (!this.IsConnected)
+            {
+                throw new NotConnectedException();
+            }
+
+            return this.Server.SendAsync(message);
         }
 
-        #region IDisposable Support
-        private bool disposedValue = false; // To detect redundant calls
+        public async Task DisconnectAsync(string justification)
+        {
+            if (!this.IsConnected)
+            {
+                throw new NotConnectedException();
+            }
 
-        protected virtual void Dispose(bool disposing)
+            var disconnection = new Message(NetworkCommand.Disconnection, justification);
+
+            await this.Server.SendAsync(disconnection);
+
+            var timer = Stopwatch.StartNew();
+
+            while (timer.ElapsedMilliseconds < this.TcpConfiguration.DisconnectionTimeout)
+            {
+                var message = await this.ReceiveMessageAsync(this.TcpConfiguration.ListeningTick);
+
+                if (message != null && message.IsValid && message.Command == NetworkCommand.Disconnected)
+                {
+                    // TODO : use message.InnerMessage
+                    break;
+                }
+            }
+
+            this.ResetConnection();
+        }
+
+        #endregion
+
+        #region internal methods
+
+        internal void ResetConnection()
+        {
+            this.Server?.Dispose();
+
+            this.Server = null;
+            this.OnMessageReceived = null;
+        }
+
+        #endregion
+
+        #region private methods
+
+        private async Task ListeningAsync()
+        {
+            // TODO : try/catch to manage disconnection
+            while (this.IsConnected)
+            {
+                var message = await this.Server.ReceiveAsync();
+
+                if (message == null)
+                {
+                    await Task.Delay(this.TcpConfiguration.ListeningTick);
+                }
+                else
+                {
+                    if (message.IsValid && message.Command == NetworkCommand.Message)
+                    {
+                        this.OnMessageReceived?.Invoke(this.Server, message.InnerMessage);
+                    }
+                    else if (message.IsValid && message.Command == NetworkCommand.Disconnected)
+                    {
+                        this.ResetConnection();
+                        throw new Exception("TODO");
+                    }
+                    else
+                    {
+                        // log warning : unexpected message received
+                    }
+                }
+            }
+        }
+
+        private async Task<Message> ReceiveMessageAsync(long timeout)
+        {
+            var timer = Stopwatch.StartNew();
+
+            while (true)
+            {
+                var response = await this.Server.ReceiveAsync();
+
+                if (response == null && timer.ElapsedMilliseconds > timeout)
+                {
+                    return null;
+                }
+                else if (response == null)
+                {
+                    await Task.Delay(this.TcpConfiguration.ListeningTick);
+                }
+                else
+                {
+                    return response;
+                }
+            }
+        }
+
+        #endregion
+
+        #region IDisposable Support
+
+        private bool disposedValue = false;
+
+        protected virtual async void Dispose(bool disposing)
         {
             if (!disposedValue)
             {
-                if (disposing)
+                if (disposing && this.IsConnected)
                 {
-                    // TODO: dispose managed state (managed objects).
+                    await this.DisconnectAsync(null);
                 }
-
-                // TODO: free unmanaged resources (unmanaged objects) and override a finalizer below.
-                // TODO: set large fields to null.
 
                 disposedValue = true;
             }
         }
 
-        // TODO: override a finalizer only if Dispose(bool disposing) above has code to free unmanaged resources.
-        // ~TcpNetworkClient() {
-        //   // Do not change this code. Put cleanup code in Dispose(bool disposing) above.
-        //   Dispose(false);
-        // }
-
-        // This code added to correctly implement the disposable pattern.
         public void Dispose()
         {
-            // Do not change this code. Put cleanup code in Dispose(bool disposing) above.
             Dispose(true);
-            // TODO: uncomment the following line if the finalizer is overridden above.
-            // GC.SuppressFinalize(this);
         }
 
-        internal void ResetConnection()
-        {
-            throw new NotImplementedException();
-        }
         #endregion
     }
 }

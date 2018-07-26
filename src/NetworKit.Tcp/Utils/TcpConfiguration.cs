@@ -17,6 +17,11 @@ namespace NetworKit.Tcp.Utils
         public int ConnectionTimeout { get; set; } = 10000;
 
         /// <summary>
+        /// The time (in ms) before the disconnection request stop waiting for the acquitment.
+        /// </summary>
+        public int DisconnectionTimeout { get; set; } = 1000;
+
+        /// <summary>
         /// The time (in ms) between two messages lookup, for both <see cref="TcpNetworkServer"/> and <see cref="TcpNetworkClient"/>.
         /// </summary>
         public int ListeningTick { get; set; } = 100;

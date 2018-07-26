@@ -34,20 +34,20 @@
         /// <param name="onMessageReceived">the delegate that is executed when a message from a connected client arrives</param>
         /// <param name="onDisconnect">the delegate that is executed when a client is disconnected</param>
         /// <exception cref="Exceptions.AlreadyListeningException">If the socket is already listening</exception>
-        Task StartListening(ConnectionHandler onConnectionRequested, MessageHandler onMessageReceived, DisconnectionHandler onDisconnect);
+        Task StartListeningAsync(ConnectionHandler onConnectionRequested, MessageHandler onMessageReceived, DisconnectionHandler onDisconnect);
 
         /// <summary>
         /// Broadcasts the specified message to all the connected clients.
         /// </summary>
         /// <param name="message">The message to broadcast</param>
-        Task Broadcast(string message);
+        Task BroadcastAsync(string message);
 
         /// <summary>
         /// Closes the connection with the specified client.
         /// </summary>
         /// <param name="client">the client to disconnect with</param>
         /// <param name="justification">the justfication of the disconnection</param>
-        Task CloseConnection(IRemoteConnection client, string justification);
+        Task CloseConnectionAsync(IRemoteConnection client, string justification);
 
         /// <summary>
         /// Stops the server from listening.

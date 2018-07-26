@@ -21,6 +21,8 @@
 
         public IEnumerable<IRemoteConnection> Clients { get; }
 
+        public TcpConfiguration TcpConfiguration { get; }
+
         #endregion
 
         #region private properties
@@ -48,7 +50,7 @@
         /// <summary>
         /// The delegate executed when a remote is disconnected
         /// </summary>
-        internal DisconnectionHandler OnDisconnect { get; private set; }
+        private DisconnectionHandler OnDisconnect { get; set; }
 
         #endregion
 
@@ -58,6 +60,7 @@
         {
             this.Listener = new TcpListener(IPAddress.Any, port);
             this.TcpClients = new List<TcpRemoteConnection>();
+            this.TcpConfiguration = new TcpConfiguration();
             this.Clients = new ReadOnlyCollection<TcpRemoteConnection>(this.TcpClients);
         }
 
@@ -65,7 +68,7 @@
 
         #region methods
 
-        public Task StartListening(ConnectionHandler onConnectionRequested, MessageHandler onMessageReceived, DisconnectionHandler onDisconnect)
+        public Task StartListeningAsync(ConnectionHandler onConnectionRequested, MessageHandler onMessageReceived, DisconnectionHandler onDisconnect)
         {
             if (this.IsListening)
             {
@@ -76,10 +79,10 @@
             this.OnMessageReceived = onMessageReceived;
             this.OnDisconnect = onDisconnect;
 
-            return Task.WhenAll(this.ListeningConnection(), this.ListeningMessage());
+            return Task.WhenAll(this.ListeningConnectionAsync(), this.ListeningMessageAsync());
         }
 
-        public async Task Broadcast(string message)
+        public async Task BroadcastAsync(string message)
         {
             var currentClients = this.TcpClients.ToList();
             var broadcasting = new List<Task>(currentClients.Count);
@@ -92,7 +95,7 @@
             await Task.WhenAll(broadcasting);
         }
 
-        public async Task CloseConnection(IRemoteConnection client, string justification)
+        public async Task CloseConnectionAsync(IRemoteConnection client, string justification)
         {
             if (this.TcpClients.Contains(client))
             {
@@ -100,9 +103,7 @@
 
                 await tcpRemote.SendAsync(new Message(NetworkCommand.Disconnected, justification));
 
-                this.TcpClients.Remove(tcpRemote);
-
-                tcpRemote.TcpClient.Close();
+                this.RemoveClient(tcpRemote, justification);
             }
         }
 
@@ -115,12 +116,30 @@
 
         #endregion
 
+        #region internal methods
+
+        /// <summary>
+        /// Removes the specified client from the list of <see cref="Clients"/>. Also disposes the underlying TcpClient instance.
+        /// </summary>
+        /// <param name="client">The client to remove</param>
+        /// <param name="justification">The justification sent by the client</param>
+        internal void RemoveClient(TcpRemoteConnection client, string justification)
+        {
+            this.TcpClients.Remove(client);
+
+            client.Dispose();
+
+            this.OnDisconnect?.Invoke(client, justification);
+        }
+
+        #endregion
+
         #region private methods
 
         /// <summary>
         /// Listens for new connection request
         /// </summary>
-        private async Task ListeningConnection()
+        private async Task ListeningConnectionAsync()
         {
             this.Listener.Start();
 
@@ -130,7 +149,7 @@
                 {
                     var client = await this.Listener.AcceptTcpClientAsync();
 
-                    Task.Run(async () => await this.ValidateConnection(client));
+                    this.ValidateConnectionAsync(client);
                 }
                 catch (Exception e)
                 {
@@ -148,12 +167,86 @@
         }
 
         /// <summary>
+        /// Wait for the connection request, and execute the <see cref="OnConnectionRequested"/> delegate when it arrives
+        /// </summary>
+        /// <param name="remoteConnection"></param>
+        private async Task ValidateConnectionAsync(TcpClient client)
+        {
+            try
+            {
+                var remote = new TcpRemoteConnection(client, this);
+
+                Message request = null;
+
+                var chrono = Stopwatch.StartNew();
+
+                while (request == null)
+                {
+                    if (chrono.ElapsedMilliseconds > this.TcpConfiguration.ConnectionTimeout)
+                    {
+                        Message response = new Message(NetworkCommand.ConnectionFailed, "The connection request takes to long.");
+
+                        await remote.SendAsync(response);
+
+                        remote.Dispose();
+
+                        return;
+                    }
+
+                    request = await remote.ReceiveAsync();
+
+                    if (request == null)
+                    {
+                        await Task.Delay(this.TcpConfiguration.ListeningTick);
+                    }
+                }
+
+                if (request.IsValid && request.Command == NetworkCommand.ConnectionRequested)
+                {
+                    string responseStr = null;
+
+                    var success = this.OnConnectionRequested?.Invoke(remote, request.InnerMessage, out responseStr) ?? true;
+
+                    Message response = new Message(success ? NetworkCommand.ConnectionGranted : NetworkCommand.ConnectionFailed, responseStr);
+
+                    await remote.SendAsync(response);
+
+                    if (success)
+                    {
+                        this.TcpClients.Add(remote);
+                        //log.Debug("Connection Granted");
+                    }
+                    else
+                    {
+                        remote.Dispose();
+                        //log.Debug("Connection Refused");
+                    }
+                }
+                else
+                {
+                    Message response = new Message(NetworkCommand.ConnectionFailed, "The connection request is not in the valid format or with the expected command.");
+
+                    await remote.SendAsync(response);
+                    remote.Dispose();
+
+                    //log.Debug("Connection Request Invalid");
+                }
+            }
+            catch (Exception e)
+            {
+                //log.Error(e);
+            }
+            finally
+            {
+                //log.DebugFormat("Validation of {0}:{1} finished", remote.IPAddress, remote.Port);
+            }
+        }
+
+        /// <summary>
         /// Listens for new incomming message and execute the <see cref="OnMessageReceived"/> delegate
         /// </summary>
-        private async Task ListeningMessage()
+        private async Task ListeningMessageAsync()
         {
-            var listeningTick = Settings.Default.ListeningTick;
-
             while (this.IsListening)
             {
                 try
@@ -179,12 +272,12 @@
 
                     foreach (var remote in disconnectedRemotes)
                     {
-                        await remote.Key.SendAsync(new Message(NetworkCommand.Disconnected, null));
+                        remote.Key.SendAsync(new Message(NetworkCommand.Disconnected, null));
 
                         this.RemoveClient(remote.Key, remote.Value);
                     }
 
-                    await Task.Delay(listeningTick);
+                    await Task.Delay(this.TcpConfiguration.ListeningTick);
                 }
                 catch (Exception e)
                 {
@@ -195,103 +288,13 @@
         }
 
         /// <summary>
-        /// Wait for the connection request, and execute the <see cref="OnConnectionRequested"/> delegate when it arrives
-        /// </summary>
-        /// <param name="remoteConnection"></param>
-        private async Task ValidateConnection(TcpClient client)
-        {
-            var remote = new TcpRemoteConnection(client, this);
-
-            try
-            {
-                Message request = null;
-
-                var connectionTimeout = Settings.Default.ConnectionTimeout;
-
-                var chrono = Stopwatch.StartNew();
-
-                while (request == null)
-                {
-                    if (chrono.ElapsedMilliseconds > connectionTimeout)
-                    {
-                        Message response = new Message(NetworkCommand.ConnectionFailed, "The connection request takes to long.");
-
-                        await remote.SendAsync(response);
-                        remote.TcpClient.Close();
-                        return;
-                    }
-
-                    request = await remote.ReceiveAsync();
-
-                    if (request == null)
-                    {
-                        await Task.Delay(100);
-                    }
-                }
-
-                if (request.IsValid && request.Command == NetworkCommand.ConnectionRequested)
-                {
-                    string responseStr = null;
-                    var success = this.OnConnectionRequested != null
-                        ? this.OnConnectionRequested(remote, request.InnerMessage, out responseStr)
-                        : true;
-
-                    Message response = new Message(success ? NetworkCommand.ConnectionGranted : NetworkCommand.ConnectionFailed, responseStr);
-
-                    await remote.SendAsync(response);
-
-                    if (success)
-                    {
-                        this.Clients.Add(remote);
-                        log.Debug("Connection Granted");
-                    }
-                    else
-                    {
-                        remote.TcpClient.Close();
-                        log.Debug("Connection Refused");
-                    }
-                }
-                else
-                {
-                    Message response = new Message(NetworkCommand.ConnectionFailed, "The connection request is not in the valid format or with the expected command.");
-
-                    await remote.SendAsync(response);
-                    remote.TcpClient.Close();
-
-                    log.Debug("Connection Request Invalid");
-                }
-            }
-            catch (Exception e)
-            {
-                log.Error(e);
-            }
-            finally
-            {
-                log.DebugFormat("Validation of {0}:{1} finished", remote.IPAddress, remote.Port);
-            }
-        }
-
-        /// <summary>
-        /// Removes the specified client from the list of <see cref="Clients"/>. Also disposes the underlying TcpClient instance.
-        /// </summary>
-        /// <param name="client">The client to remove</param>
-        /// <param name="justification">The justification sent by the client</param>
-        private void RemoveClient(TcpRemoteConnection client, string justification)
-        {
-            this.TcpClients.Remove(client);
-            client.TcpClient.Close();
-
-            this.OnDisconnect?.Invoke(client, justification);
-        }
-
-        /// <summary>
         /// Close all the remote connected and clear the list
         /// </summary>
         private void ResetConnections()
         {
             foreach (var remote in this.TcpClients)
             {
-                remote.TcpClient.Close();
+                remote.Dispose();
             }
 
             this.TcpClients.Clear();
@@ -310,8 +313,6 @@
                 if (disposing)
                 {
                     this.StopListening();
-
-                    ResetConnections();
                 }
 
                 disposedValue = true;

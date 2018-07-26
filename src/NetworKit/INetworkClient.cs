@@ -30,13 +30,13 @@
         /// <param name="message">an additionnal message to the request</param>
         /// <exception cref="Exceptions.ConnectionFailedException">When the SocketClient can't connect to the remote connection.</exception>
         /// <returns>the response of the server</returns>
-        Task<string> Connect(string ipAddress, int port, MessageHandler onMessageReceived, string message);
+        Task<string> ConnectAsync(string ipAddress, int port, MessageHandler onMessageReceived, string message);
 
         /// <summary>
         /// Shutdowns the connection with the remote server
         /// </summary>
         /// <param name="justification">the justification to send to the server</param>
-        Task Disconnect(string justification);
+        Task DisconnectAsync(string justification);
 
         /// <summary>
         /// Sends a message to the connected server
@@ -44,7 +44,7 @@
         /// <param name="message">the message to send</param>
         /// <exception cref="Exceptions.NotConnectedException">When the client is not connected</exception>
         /// <exception cref="Exceptions.ConnectionLostException">When the server is no longer available</exception>
-        Task Send(string message);
+        Task SendAsync(string message);
 
         #endregion
     }

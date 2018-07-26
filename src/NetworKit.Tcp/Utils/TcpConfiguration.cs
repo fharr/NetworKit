@@ -20,5 +20,10 @@ namespace NetworKit.Tcp.Utils
         /// The time (in ms) between two messages lookup, for both <see cref="TcpNetworkServer"/> and <see cref="TcpNetworkClient"/>.
         /// </summary>
         public int ListeningTick { get; set; } = 100;
+
+        /// <summary>
+        /// The sequence of characters isolating two messages within the Tcp buffer.
+        /// </summary>
+        public string MessageBound { get; set; } = "><";
     }
 }

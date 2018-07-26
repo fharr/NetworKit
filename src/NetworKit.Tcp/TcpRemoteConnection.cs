@@ -1,6 +1,7 @@
 ﻿namespace NetworKit.Tcp
 {
     using NetworKit.Exceptions;
+    using NetworKit.Tcp.Exceptions;
     using NetworKit.Tcp.Utils;
     using System.Net;
     using System.Net.NetworkInformation;
@@ -12,8 +13,12 @@
     {
         #region properties
 
+        public bool IsConnected { get { return this.TcpClient.Connected; } }
+
         public string IPAddress { get { return (this.TcpClient.Client.RemoteEndPoint as IPEndPoint).Address.ToString(); } }
+
         public int Port { get { return (this.TcpClient.Client.RemoteEndPoint as IPEndPoint).Port; } }
+
         public long Ping
         {
             get
@@ -22,39 +27,45 @@
             }
         }
 
-        /// <summary>
-        /// The tcp client used to send and receive message
-        /// </summary>
-        internal TcpClient TcpClient { get; set; }
-
         #endregion
 
         #region private properties
 
         /// <summary>
+        /// The tcp client used to send and receive message
+        /// </summary>
+        private TcpClient TcpClient { get; }
+
+        /// <summary>
         /// The buffer used to store partial messages received
         /// </summary>
-        private StringBuilder Buffer { get; set; }
+        private StringBuilder Buffer { get; }
 
         /// <summary>
         /// The ping instance used to get the ping between two remote connection
         /// </summary>
-        private Ping PingUtil { get; set; }
+        private Ping PingUtil { get; }
 
         /// <summary>
         /// The TcpNetworkServer which is managin this instance of TcpRemoteConnection
         /// </summary>
-        private TcpNetworkServer Server { get; set; }
+        private TcpNetworkServer Server { get; }
 
         /// <summary>
         /// The TcpNetworkClient which is managing this instance of TcpRemoteConnection
         /// </summary>
-        private TcpNetworkClient Client { get; set; }
+        private TcpNetworkClient Client { get; }
 
         /// <summary>
-        /// The Encoding used to serialize messages
+        /// The configuration of the related network instance
         /// </summary>
-        private Encoding Encoder { get; set; }
+        private TcpConfiguration TcpConfiguration
+        {
+            get
+            {
+                return this.Server?.TcpConfiguration ?? this.Client.TcpConfiguration;
+            }
+        }
 
         #endregion
 
@@ -68,11 +79,8 @@
         internal TcpRemoteConnection(TcpClient client)
         {
             this.TcpClient = client;
-            this.Buffer = new StringBuilder();
-
-            this.Encoder = Encoding.GetEncoding(Settings.Default.Encoding);
-
             this.PingUtil = new Ping();
+            this.Buffer = new StringBuilder();
         }
 
         /// <summary>
@@ -107,7 +115,7 @@
         {
             var msg = new Message(NetworkCommand.Message, message);
 
-            return this.Send(msg);
+            return this.SendAsync(msg);
         }
 
         #endregion
@@ -120,10 +128,15 @@
         /// <param name="message"></param>
         internal async Task SendAsync(Message message)
         {
-            var datagram = this.SerializeMessage(message.ToString() + Settings.Default.MessageBound);
+            if (message.InnerMessage.Contains(this.TcpConfiguration.MessageBound))
+            {
+                throw new MessageBoundCollisionException(message.InnerMessage, this.TcpConfiguration.MessageBound);
+            }
 
             try
             {
+                var datagram = this.SerializeMessage(message.ToString() + this.TcpConfiguration.MessageBound);
+
                 await this.TcpClient.GetStream().WriteAsync(datagram, 0, datagram.Length);
             }
             catch (SocketException e)
@@ -134,12 +147,12 @@
                         // The remote connection is disconnected
                         if (this.Server != null)
                         {
-                            this.Server.Clients.Remove(this);
-                            this.Server.OnDisconnect?.Invoke(this, null);
+                            this.Server.RemoveClient(this, null);
                         }
                         else if (this.Client != null)
                         {
                             this.Client.ResetConnection();
+
                             throw new ConnectionLostException(e);
                         }
                         break;
@@ -170,17 +183,15 @@
 
             Message message = null;
 
-            var separator = Settings.Default.MessageBound;
-
             var currentBuffer = this.Buffer.ToString();
-            var i = currentBuffer.IndexOf(separator);
+            var i = currentBuffer.IndexOf(this.TcpConfiguration.MessageBound);
 
             // Extracting next message
             if (i != -1)
             {
                 message = Message.Parse(currentBuffer.Substring(0, i));
 
-                this.Buffer.Remove(0, i + separator.Lenght);
+                this.Buffer.Remove(0, i + this.TcpConfiguration.MessageBound.Length);
             }
 
             return message;
@@ -197,7 +208,7 @@
         /// <returns>The string serialized into a byte array</returns>
         private byte[] SerializeMessage(string message)
         {
-            var datagram = this.Encoder.GetBytes(message);
+            var datagram = this.TcpConfiguration.UsedEncoding.GetBytes(message);
 
             return datagram;
         }
@@ -209,7 +220,7 @@
         /// <returns>The string deserialized</returns>
         private string DeserializeDatagram(byte[] datagram)
         {
-            var message = this.Encoder.GetString(datagram);
+            var message = this.TcpConfiguration.UsedEncoding.GetString(datagram);
 
             return message;
         }
@@ -231,6 +242,29 @@
             return this.TcpClient.GetHashCode();
         }
 
+        #endregion
+
+        #region IDisposable Support
+
+        private bool disposedValue = false;
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!disposedValue)
+            {
+                if (disposing)
+                {
+                    this.TcpClient.Close();
+                }
+
+                disposedValue = true;
+            }
+        }
+
+        public void Dispose()
+        {
+            Dispose(true);
+        }
         #endregion
     }
 }

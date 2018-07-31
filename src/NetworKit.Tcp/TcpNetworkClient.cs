@@ -13,9 +13,9 @@
     {
         #region public properties
 
-        public int Port { get { return this.Server.Port; } }
+        public int Port { get { return this.Server?.Port ?? -1; } }
 
-        public bool IsConnected { get { return this.Server.IsConnected; } }
+        public bool IsConnected { get { return this.Server?.IsConnected ?? false; } }
 
         public TcpConfiguration TcpConfiguration { get; }
 

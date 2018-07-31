@@ -25,7 +25,7 @@
             if (this.IsValid)
             {
                 this.Command = (NetworkCommand)Enum.Parse(typeof(NetworkCommand), message.Substring(0, i));
-                this.InnerMessage = message.Substring(i);
+                this.InnerMessage = message.Substring(i+1);
             }
         }
 

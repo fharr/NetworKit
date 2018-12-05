@@ -1,10 +1,8 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace NetworKit.Tcp.Exceptions
+﻿namespace NetworKit.Tcp.Exceptions
 {
-    public class MessageBoundCollisionException : Exception
+    using System;
+
+    public class MessageSeparatorCollisionException : Exception
     {
         #region properties
 
@@ -15,7 +13,7 @@ namespace NetworKit.Tcp.Exceptions
 
         #region constructors
 
-        public MessageBoundCollisionException(string message, string separator)
+        public MessageSeparatorCollisionException(string message, string separator)
             : base("Your message contains the separator used internally to differentiate messages within the TCP buffer. Do not use these characters in your message or overwrite the MessageBound property of both your client and your server instances.")
         {
             this.TcpMessage = message;

@@ -3,229 +3,216 @@
     using NetworKit.Exceptions;
     using NetworKit.Tcp.Utils;
     using System;
-    using System.Collections.Generic;
-    using System.Diagnostics;
+    using System.Net;
     using System.Net.Sockets;
-    using System.Text;
     using System.Threading.Tasks;
+    using System.Timers;
 
     public class TcpNetworkClient : INetworkClient
     {
-        #region public properties
+        #region fields
 
-        public int Port { get { return this.Server?.Port ?? -1; } }
+        private readonly Timer _timer;
 
-        public bool IsConnected { get { return this.Server?.IsConnected ?? false; } }
-
-        public TcpConfiguration TcpConfiguration { get; }
+        private TcpRemoteConnection _remoteServer;
 
         #endregion
 
-        #region private properties
+        #region properties
 
-        /// <summary>
-        /// The server on which this instance is connected.
-        /// </summary>
-        private TcpRemoteConnection Server { get; set; }
+        public bool IsConnected { get { return _remoteServer != null; } }
 
-        /// <summary>
-        /// The deletage executed when a new message is received.
-        /// </summary>
-        private MessageHandler OnMessageReceived { get; set; }
+        public INetworkClientSettings Settings { get { return this.TcpSettings; } }
+        public TcpNetworkClientSettings TcpSettings { get; }
 
         #endregion
 
         #region constructors
 
-        public TcpNetworkClient()
+        public TcpNetworkClient(INetworkClientMessageHandler handler)
         {
-            this.TcpConfiguration = new TcpConfiguration();
+            if (handler == null)
+            {
+                throw new ArgumentNullException(nameof(handler));
+            }
+
+            _timer = new Timer();
+            _timer.AutoReset = true;
+            _timer.Elapsed += this.Tick;
+
+            this.TcpSettings = new TcpNetworkClientSettings { Handler = handler };
         }
 
         #endregion
 
         #region public methods
 
-        public async Task<string> ConnectAsync(string ipAddress, int port, MessageHandler onMessageReceived, string message)
+        public async Task<string> ConnectAsync(string serverAddress, int serverPort, string request = null)
         {
-            if (this.IsConnected)
-            {
-                throw new AlreadyConnectedException();
-            }
-
-            var server = new TcpClient();
+            this.IsAliveAndDisconnected();
 
             try
             {
-                await server.ConnectAsync(ipAddress, port);
+                // Initiates the Tcp connection
+                var remote = await InitiateTcpConnectionAsync(serverAddress, serverPort);
+
+                // Sends the connection request
+                await remote.SendAsync(new TcpMessage(TcpNetworkCommand.ConnectionRequest, request));
+
+                // Waits for the connection response
+                var response = await remote.ReceiveAsync(this.TcpSettings.ConnectionTimeout);
+
+                if (response == null)
+                    throw new ConnectionFailedException(ConnectionFailedType.Timeout);
+                else if (!response.IsValid)
+                    throw new ConnectionFailedException(ConnectionFailedType.InvalidResponse, response.InnerMessage);
+                else if (response.Command == TcpNetworkCommand.ConnectionDenied)
+                    throw new ConnectionFailedException(ConnectionFailedType.ConnectionRefused, response.InnerMessage);
+                else if (response.Command != TcpNetworkCommand.ConnectionGranted)
+                    throw new ConnectionFailedException(ConnectionFailedType.UnexpectedResponse, response.ToString());
+
+                _remoteServer = remote;
+
+                // Starts the listening loop
+                _timer.Interval = this.TcpSettings.ListeningTick;
+                _timer.Enabled = true;
+
+                return response.InnerMessage;
             }
-            catch (SocketException e)
+            catch (Exception e) when (!(e is ConnectionFailedException))
             {
-                // TODO : log exception
-
-                server.Dispose();
-
-                throw new ConnectionFailedException(ConnectionFailedType.RemoteConnectionUnreachable);
+                throw new ConnectionFailedException(ConnectionFailedType.Other, e);
             }
-
-            this.Server = new TcpRemoteConnection(server, this);
-
-            this.OnMessageReceived = onMessageReceived;
-
-            var connectionRequest = new Message(NetworkCommand.ConnectionRequested, message);
-
-            await this.Server.SendAsync(connectionRequest);
-
-            var connectionResponse = await this.ReceiveMessageAsync(this.TcpConfiguration.ConnectionTimeout);
-
-            if (connectionResponse == null)
-            {
-                this.ResetConnection();
-                throw new ConnectionFailedException(ConnectionFailedType.Timeout);
-            }
-            else if (!connectionResponse.IsValid)
-            {
-                this.ResetConnection();
-                throw new ConnectionFailedException(ConnectionFailedType.InvalidResponse);
-            }
-            else if (connectionResponse.Command == NetworkCommand.ConnectionFailed)
-            {
-                this.ResetConnection();
-                throw new ConnectionFailedException(ConnectionFailedType.ConnectionRefused);
-            }
-            else if (connectionResponse.Command != NetworkCommand.ConnectionGranted)
-            {
-                this.ResetConnection();
-                throw new ConnectionFailedException(ConnectionFailedType.Other);
-            }
-
-            this.ListeningAsync();
-
-            return connectionResponse.InnerMessage;
         }
 
         public Task SendAsync(string message)
         {
-            if (!this.IsConnected)
-            {
-                throw new NotConnectedException();
-            }
+            this.IsAliveAndConnected();
 
-            return this.Server.SendAsync(message);
+            return _remoteServer.SendAsync(new TcpMessage(TcpNetworkCommand.Message, message));
         }
 
-        public async Task DisconnectAsync(string justification)
+        public async Task DisconnectAsync(string justification = null)
         {
-            if (!this.IsConnected)
-            {
-                throw new NotConnectedException();
-            }
+            this.IsAliveAndDisconnected();
 
-            var disconnection = new Message(NetworkCommand.Disconnection, justification);
+            await _remoteServer.SendAsync(new TcpMessage(TcpNetworkCommand.Disconnection, justification));
 
-            await this.Server.SendAsync(disconnection);
-
-            var timer = Stopwatch.StartNew();
-
-            while (timer.ElapsedMilliseconds < this.TcpConfiguration.DisconnectionTimeout)
-            {
-                var message = await this.ReceiveMessageAsync(this.TcpConfiguration.ListeningTick);
-
-                if (message != null && message.IsValid && message.Command == NetworkCommand.Disconnected)
-                {
-                    // TODO : use message.InnerMessage
-                    break;
-                }
-            }
-
-            this.ResetConnection();
-        }
-
-        #endregion
-
-        #region internal methods
-
-        internal void ResetConnection()
-        {
-            this.Server?.Dispose();
-
-            this.Server = null;
-            this.OnMessageReceived = null;
+            this.Disconnect();
         }
 
         #endregion
 
         #region private methods
 
-        private async Task ListeningAsync()
+        private void IsAlive()
         {
-            // TODO : try/catch to manage disconnection
-            while (this.IsConnected)
+            if (_disposedValue)
             {
-                var message = await this.Server.ReceiveAsync();
-
-                if (message == null)
-                {
-                    await Task.Delay(this.TcpConfiguration.ListeningTick);
-                }
-                else
-                {
-                    if (message.IsValid && message.Command == NetworkCommand.Message)
-                    {
-                        this.OnMessageReceived?.Invoke(this.Server, message.InnerMessage);
-                    }
-                    else if (message.IsValid && message.Command == NetworkCommand.Disconnected)
-                    {
-                        this.ResetConnection();
-                        throw new Exception("TODO");
-                    }
-                    else
-                    {
-                        // log warning : unexpected message received
-                    }
-                }
+                throw new ObjectDisposedException(nameof(TcpNetworkClient));
             }
         }
 
-        private async Task<Message> ReceiveMessageAsync(long timeout)
+        private void IsAliveAndConnected()
         {
-            var timer = Stopwatch.StartNew();
+            this.IsAlive();
 
-            while (true)
+            if (!this.IsConnected)
             {
-                var response = await this.Server.ReceiveAsync();
+                throw new NotConnectedException();
+            }
+        }
 
-                if (response == null && timer.ElapsedMilliseconds > timeout)
+        private void IsAliveAndDisconnected()
+        {
+            this.IsAlive();
+
+            if (this.IsConnected)
+            {
+                throw new AlreadyConnectedException();
+            }
+        }
+
+        private async Task<TcpRemoteConnection> InitiateTcpConnectionAsync(string serverAddress, int serverPort)
+        {
+            var client = new TcpClient(new IPEndPoint(IPAddress.Any, this.TcpSettings.LocalPort));
+
+            var connection = client.ConnectAsync(serverAddress, serverPort);
+            var timeout = Task.Delay(this.TcpSettings.ConnectionTimeout);
+
+            await Task.WhenAny(connection, timeout);
+
+            if (!connection.IsCompleted)
+            {
+                client.Close();
+                throw new ConnectionFailedException(ConnectionFailedType.RemoteConnectionUnreachable);
+            }
+            else if (connection.IsFaulted)
+            {
+                throw new ConnectionFailedException(ConnectionFailedType.ConnectionImpossible, connection.Exception.InnerException);
+            }
+
+            return new TcpRemoteConnection(client, this.TcpSettings);
+        }
+
+        private async void Tick(object sender, ElapsedEventArgs e)
+        {
+            try
+            {
+                for (var message = await _remoteServer.ReceiveAsync(); message != null; message = await _remoteServer.ReceiveAsync())
                 {
-                    return null;
-                }
-                else if (response == null)
-                {
-                    await Task.Delay(this.TcpConfiguration.ListeningTick);
-                }
-                else
-                {
-                    return response;
+                    if (message.IsValid && message.Command == TcpNetworkCommand.Message)
+                    {
+                        this.TcpSettings.Handler?.OnMessageReceived(message.InnerMessage);
+                    }
+                    else if (message.IsValid && message.Command == TcpNetworkCommand.Disconnection)
+                    {
+                        this.OnServerDisconnection(message.InnerMessage);
+                        return;
+                    }
                 }
             }
+            catch (Exception ex)
+            {
+                Console.WriteLine("---------------------- Error while listening new message within the client");
+                Console.WriteLine(ex.StackTrace);
+                // if connection lost : this.OnServerDisconnection("Connection lost");
+                // otherwise : do nothing
+            }
+        }
+
+        private void OnServerDisconnection(string justification)
+        {
+            this.Disconnect();
+
+            this.TcpSettings.Handler?.OnServerDisconnection(justification);
+        }
+
+        private void Disconnect()
+        {
+            _timer.Enabled = false;
+
+            _remoteServer.Dispose();
+            _remoteServer = null;
         }
 
         #endregion
 
         #region IDisposable Support
 
-        private bool disposedValue = false;
+        private bool _disposedValue = false;
 
-        protected virtual async void Dispose(bool disposing)
+        protected virtual void Dispose(bool disposing)
         {
-            if (!disposedValue)
+            if (!_disposedValue)
             {
-                if (disposing && this.IsConnected)
+                if (disposing)
                 {
-                    await this.DisconnectAsync(null);
+                    _remoteServer?.Dispose();
+                    _timer.Dispose();
                 }
 
-                disposedValue = true;
+                _disposedValue = true;
             }
         }
 

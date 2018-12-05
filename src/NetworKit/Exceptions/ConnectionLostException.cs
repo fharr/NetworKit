@@ -10,7 +10,7 @@
         /// Instantiates a new connection lost exception.
         /// </summary>
         public ConnectionLostException(Exception cause)
-            : base("The server you were connected with is no longer available.", cause)
+            : base("The connection with the server has been lost.", cause)
         { }
 
         /// <summary>

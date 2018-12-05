@@ -3,67 +3,48 @@
     using NetworKit.Exceptions;
     using NetworKit.Tcp.Exceptions;
     using NetworKit.Tcp.Utils;
+    using System;
+    using System.Diagnostics;
+    using System.IO;
     using System.Net;
-    using System.Net.NetworkInformation;
     using System.Net.Sockets;
     using System.Text;
     using System.Threading.Tasks;
 
-    internal class TcpRemoteConnection : IRemoteConnection
+    internal class TcpRemoteConnection : IRemoteConnection, IDisposable
     {
-        #region properties
+        #region fields
 
-        public bool IsConnected { get { return this.TcpClient.Connected; } }
-
-        public string IPAddress { get { return (this.TcpClient.Client.RemoteEndPoint as IPEndPoint).Address.ToString(); } }
-
-        public int Port { get { return (this.TcpClient.Client.RemoteEndPoint as IPEndPoint).Port; } }
-
-        public long Ping
-        {
-            get
-            {
-                return this.PingUtil.Send((this.TcpClient.Client.RemoteEndPoint as IPEndPoint).Address).RoundtripTime;
-            }
-        }
+        private readonly TcpClient _client;
+        private readonly TcpNetworkSettings _config;
+        private readonly StringBuilder _messageBuffer;
 
         #endregion
 
-        #region private properties
+        #region properties
 
-        /// <summary>
-        /// The tcp client used to send and receive message
-        /// </summary>
-        private TcpClient TcpClient { get; }
-
-        /// <summary>
-        /// The buffer used to store partial messages received
-        /// </summary>
-        private StringBuilder Buffer { get; }
-
-        /// <summary>
-        /// The ping instance used to get the ping between two remote connection
-        /// </summary>
-        private Ping PingUtil { get; }
-
-        /// <summary>
-        /// The TcpNetworkServer which is managin this instance of TcpRemoteConnection
-        /// </summary>
-        private TcpNetworkServer Server { get; }
-
-        /// <summary>
-        /// The TcpNetworkClient which is managing this instance of TcpRemoteConnection
-        /// </summary>
-        private TcpNetworkClient Client { get; }
-
-        /// <summary>
-        /// The configuration of the related network instance
-        /// </summary>
-        private TcpConfiguration TcpConfiguration
+        public bool Connected
         {
             get
             {
-                return this.Server?.TcpConfiguration ?? this.Client.TcpConfiguration;
+                this.EnsureIsAlive();
+                return _client.Connected;
+            }
+        }
+        public string IPAddress
+        {
+            get
+            {
+                this.EnsureIsAliveAndConnected();
+                return (_client.Client.RemoteEndPoint as IPEndPoint).Address.ToString();
+            }
+        }
+        public int Port
+        {
+            get
+            {
+                this.EnsureIsAliveAndConnected();
+                return (_client.Client.RemoteEndPoint as IPEndPoint).Port;
             }
         }
 
@@ -71,158 +52,84 @@
 
         #region constructors
 
-        /// <summary>
-        ///Instantiates a new tcp remote connection
-        /// </summary>
-        /// <param name="client">The TcpClient used to send and receive message</param>
-        /// <param name="separator">The separator used to distinguish two different message</param>
-        internal TcpRemoteConnection(TcpClient client)
+        internal TcpRemoteConnection(TcpClient client, TcpNetworkSettings config)
         {
-            this.TcpClient = client;
-            this.PingUtil = new Ping();
-            this.Buffer = new StringBuilder();
-        }
+            _client = client;
+            _config = config;
+            _messageBuffer = new StringBuilder();
 
-        /// <summary>
-        /// Instantiates a new tcp remote connection
-        /// </summary>
-        /// <param name="client">The TcpClient used to send and receive message</param>
-        /// <param name="separator">The separator used to distinguish two different message</param>
-        /// <param name="networkServer">The server managing the new instance</param>
-        public TcpRemoteConnection(TcpClient client, TcpNetworkServer networkServer)
-            : this(client)
-        {
-            this.Server = networkServer;
-        }
-
-        /// <summary>
-        /// Instantiates a new tcp remote connection
-        /// </summary>
-        /// <param name="client">The TcpClient used to send and receive message</param>
-        /// <param name="separator">The separator used to distinguish two different message</param>
-        /// <param name="socketClient">The client managing the new instance</param>
-        public TcpRemoteConnection(TcpClient client, TcpNetworkClient networkClient)
-            : this(client)
-        {
-            this.Client = networkClient;
-        }
-
-        #endregion
-
-        #region methods
-
-        public Task SendAsync(string message)
-        {
-            var msg = new Message(NetworkCommand.Message, message);
-
-            return this.SendAsync(msg);
+            this.EnsureIsAliveAndConnected();
         }
 
         #endregion
 
         #region internal methods
 
-        /// <summary>
-        /// Sends the specified message to the remote connection
-        /// </summary>
-        /// <param name="message"></param>
-        internal async Task SendAsync(Message message)
+        internal async Task SendAsync(TcpMessage message)
         {
-            if (message.InnerMessage.Contains(this.TcpConfiguration.MessageBound))
+            this.EnsureIsAliveAndConnected();
+
+            if (message.InnerMessage.Contains(_config.MessageSeparator))
             {
-                throw new MessageBoundCollisionException(message.InnerMessage, this.TcpConfiguration.MessageBound);
+                throw new MessageSeparatorCollisionException(message.InnerMessage, _config.MessageSeparator);
             }
+
+            var msg = message.ToString() + _config.MessageSeparator;
+
+            var bytes = _config.MessageEncoding.GetBytes(msg);
 
             try
             {
-                var datagram = this.SerializeMessage(message.ToString() + this.TcpConfiguration.MessageBound);
-
-                await this.TcpClient.GetStream().WriteAsync(datagram, 0, datagram.Length);
+                await _client.GetStream().WriteAsync(bytes, 0, bytes.Length);
             }
-            catch (SocketException e)
+            catch (IOException e)
             {
-                switch (e.ErrorCode)
-                {
-                    case 10053:
-                        // The remote connection is disconnected
-                        if (this.Server != null)
-                        {
-                            this.Server.RemoveClient(this, null);
-                        }
-                        else if (this.Client != null)
-                        {
-                            this.Client.ResetConnection();
-
-                            throw new ConnectionLostException(e);
-                        }
-                        break;
-                    default:
-                        // In all the other cases, the exception is thrown
-                        throw e;
-                }
+                throw new ConnectionLostException(e);
             }
         }
 
-        /// <summary>
-        /// Looks into the TcpClient for a complete message and returns it. null if the message is incomplete.
-        /// </summary>
-        /// <returns>The received message. Null if not complete</returns>
-        internal async Task<Message> ReceiveAsync()
+        internal async Task<TcpMessage> ReceiveAsync()
         {
-            // Retrieving latest bytes
-            if (this.TcpClient.Available > 0)
+            this.EnsureIsAliveAndConnected();
+
+            if (_client.Available > 0)
             {
-                byte[] bytes = new byte[this.TcpClient.Available];
+                var buffer = new byte[_client.Available];
+                await _client.GetStream().ReadAsync(buffer, 0, buffer.Length);
 
-                await this.TcpClient.GetStream().ReadAsync(bytes, 0, bytes.Length);
-
-                string addition = this.DeserializeDatagram(bytes);
-
-                this.Buffer.Append(addition);
+                var data = _config.MessageEncoding.GetString(buffer);
+                _messageBuffer.Append(data);
             }
 
-            Message message = null;
+            var messages = _messageBuffer.ToString();
+            var index = messages.IndexOf(_config.MessageSeparator);
 
-            var currentBuffer = this.Buffer.ToString();
-            var i = currentBuffer.IndexOf(this.TcpConfiguration.MessageBound);
-
-            // Extracting next message
-            if (i != -1)
+            if (index == -1)
             {
-                message = Message.Parse(currentBuffer.Substring(0, i));
-
-                this.Buffer.Remove(0, i + this.TcpConfiguration.MessageBound.Length);
+                return null;
             }
 
-            return message;
+            _messageBuffer.Remove(0, index + _config.MessageSeparator.Length);
+
+            return TcpMessage.Parse(messages.Substring(0, index));
         }
 
-        #endregion
-
-        #region private methods
-
-        /// <summary>
-        /// Serializes a string into a byte array
-        /// </summary>
-        /// <param name="message">The string to serialize</param>
-        /// <returns>The string serialized into a byte array</returns>
-        private byte[] SerializeMessage(string message)
+        internal async Task<TcpMessage> ReceiveAsync(int timeout)
         {
-            var datagram = this.TcpConfiguration.UsedEncoding.GetBytes(message);
+            var time = Stopwatch.StartNew();
+            while (time.ElapsedMilliseconds < timeout)
+            {
+                await Task.Delay(_config.ListeningTick);
 
-            return datagram;
-        }
+                var response = await this.ReceiveAsync();
 
-        /// <summary>
-        /// Deserializes a byte array into a string
-        /// </summary>
-        /// <param name="datagram">The byte array to deserialize</param>
-        /// <returns>The string deserialized</returns>
-        private string DeserializeDatagram(byte[] datagram)
-        {
-            var message = this.TcpConfiguration.UsedEncoding.GetString(datagram);
+                if (response == null)
+                    continue;
 
-            return message;
+                return response;
+            }
+
+            return null;
         }
 
         #endregion
@@ -231,33 +138,61 @@
 
         public override bool Equals(object obj)
         {
-            if (!(obj is TcpRemoteConnection other))
+            var other = obj as TcpRemoteConnection;
+            if (other == null)
                 return false;
 
             return other.IPAddress == this.IPAddress && other.Port == this.Port;
+
+            //if (!(obj is TcpRemoteConnection other))
+            //    return false;
+
+            //return other.IPAddress == this.IPAddress && other.Port == this.Port;
         }
 
         public override int GetHashCode()
         {
-            return this.TcpClient.GetHashCode();
+            return _client.GetHashCode();
+        }
+
+        #endregion
+
+        #region private methods
+
+        private void EnsureIsAlive()
+        {
+            if (_disposedValue)
+            {
+                throw new ObjectDisposedException(nameof(TcpRemoteConnection));
+            }
+        }
+
+        private void EnsureIsAliveAndConnected()
+        {
+            this.EnsureIsAlive();
+
+            if (!_client.Connected)
+            {
+                throw new NotConnectedException();
+            }
         }
 
         #endregion
 
         #region IDisposable Support
 
-        private bool disposedValue = false;
+        private bool _disposedValue = false;
 
         protected virtual void Dispose(bool disposing)
         {
-            if (!disposedValue)
+            if (!_disposedValue)
             {
                 if (disposing)
                 {
-                    this.TcpClient.Close();
+                    _client.Close();
                 }
 
-                disposedValue = true;
+                _disposedValue = true;
             }
         }
 
@@ -265,6 +200,7 @@
         {
             Dispose(true);
         }
+
         #endregion
     }
 }

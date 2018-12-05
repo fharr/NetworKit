@@ -7,10 +7,7 @@
     {
         #region properties
 
-        /// <summary>
-        /// The port from which the client is sending messages and listening answers.
-        /// </summary>
-        int Port { get; }
+        INetworkClientSettings Settings { get; }
 
         /// <summary>
         /// Gets a value that indicates whether the client is already connected to a server.
@@ -30,13 +27,7 @@
         /// <param name="message">an additionnal message to the request</param>
         /// <exception cref="Exceptions.ConnectionFailedException">When the SocketClient can't connect to the remote connection.</exception>
         /// <returns>the response of the server</returns>
-        Task<string> ConnectAsync(string ipAddress, int port, MessageHandler onMessageReceived, string message);
-
-        /// <summary>
-        /// Shutdowns the connection with the remote server
-        /// </summary>
-        /// <param name="justification">the justification to send to the server</param>
-        Task DisconnectAsync(string justification);
+        Task<string> ConnectAsync(string serverAddress, int serverPort, string request = null);
 
         /// <summary>
         /// Sends a message to the connected server
@@ -45,6 +36,12 @@
         /// <exception cref="Exceptions.NotConnectedException">When the client is not connected</exception>
         /// <exception cref="Exceptions.ConnectionLostException">When the server is no longer available</exception>
         Task SendAsync(string message);
+
+        /// <summary>
+        /// Shutdowns the connection with the remote server
+        /// </summary>
+        /// <param name="justification">the justification to send to the server</param>
+        Task DisconnectAsync(string justification = null);
 
         #endregion
     }

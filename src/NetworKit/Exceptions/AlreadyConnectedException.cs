@@ -1,14 +1,12 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace NetworKit.Exceptions
+﻿namespace NetworKit.Exceptions
 {
+    using System;
+
     public class AlreadyConnectedException : Exception
     {
         #region constructors
 
-        public AlreadyConnectedException() : base("This instance is already connected to a server. Please dispose it before connecting to another socket.")
+        public AlreadyConnectedException() : base("This instance is already connected to a server. Please close the connection before connecting to another.")
         { }
 
         #endregion

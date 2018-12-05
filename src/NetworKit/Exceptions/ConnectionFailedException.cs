@@ -12,28 +12,35 @@
         /// </summary>
         public ConnectionFailedType TypeErreur { get; }
 
+        public string ServerResponse { get; }
+
         #endregion
 
         #region constructors
 
         /// <summary>
-        /// Instantiates a new connection failed exception, giving the cause in parameters. If the message is not specified, the default one will be provided.
+        /// Instantiates a new connection failed exception, giving the cause in parameters.
         /// </summary>
-        public ConnectionFailedException(ConnectionFailedType cause, string message = null)
-            : base(message ?? GetErrorMessage(cause))
+        /// <param name="cause">The cause of the connection failure</param>
+        /// <param name="response">The actual server response</param>
+        public ConnectionFailedException(ConnectionFailedType cause, string response = null)
+            : base(GetErrorMessage(cause))
         {
             this.TypeErreur = cause;
+            this.ServerResponse = response;
         }
 
         /// <summary>
-        /// Instantiates a new connection failed exception, giving the cause in parameters and the associated inner exception. If the message is not specified, the default one will be provided.
+        /// Instantiates a new connection failed exception, giving the cause in parameters and the associated inner exception.
         /// </summary>
-        /// <param name="innerException">The exception that cause the connection failure</param>
         /// <param name="cause">The cause of the connection failure</param>
-        public ConnectionFailedException(ConnectionFailedType cause, Exception innerException, string message = null)
-            : base(message ?? GetErrorMessage(cause), innerException)
+        /// <param name="innerException">The exception that cause the connection failure</param>
+        /// <param name="response">The actual server response</param>
+        public ConnectionFailedException(ConnectionFailedType cause, Exception innerException, string response = null)
+            : base(GetErrorMessage(cause), innerException)
         {
             this.TypeErreur = cause;
+            this.ServerResponse = response;
         }
 
         #endregion
@@ -53,8 +60,10 @@
 
     public enum ConnectionFailedType
     {
-        [Description("Your connection requestion timeout.")]
+        [Description("Your connection request timeout.")]
         Timeout,
+        [Description("The server is not started or misconfigured.")]
+        ConnectionImpossible,
         [Description("The connection has been refused by the server.")]
         ConnectionRefused,
         [Description("The specified remote connection is not reachable.")]
@@ -62,6 +71,8 @@
         [Description("The response from the server was not at the expected format.")]
         InvalidResponse,
         [Description("An unexpected connection response has been received.")]
+        UnexpectedResponse,
+        [Description("An unexpected error occured. See the inner exception.")]
         Other
     }
 }

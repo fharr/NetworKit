@@ -9,19 +9,16 @@
         #region properties
 
         /// <summary>
-        /// The port on which the server is listening.
-        /// </summary>
-        int Port { get; }
-
-        /// <summary>
         /// Gets a value that indicates whether the server is listening.
         /// </summary>
         bool IsListening { get; }
 
+        INetworkServerSettings Settings { get; }
+
         /// <summary>
         /// Gets a list that indicates all the clients connected to the server.
         /// </summary>
-        IEnumerable<IRemoteConnection> Clients { get; }
+        IReadOnlyCollection<IRemoteConnection> Clients { get; }
 
         #endregion
 
@@ -34,7 +31,7 @@
         /// <param name="onMessageReceived">the delegate that is executed when a message from a connected client arrives</param>
         /// <param name="onDisconnect">the delegate that is executed when a client is disconnected</param>
         /// <exception cref="Exceptions.AlreadyListeningException">If the socket is already listening</exception>
-        Task StartListeningAsync(ConnectionHandler onConnectionRequested, MessageHandler onMessageReceived, DisconnectionHandler onDisconnect);
+        void StartListening(Func<IRemoteConnection, string, ConnectionStatus> validateConnection = null);
 
         /// <summary>
         /// Broadcasts the specified message to all the connected clients.
@@ -42,17 +39,19 @@
         /// <param name="message">The message to broadcast</param>
         Task BroadcastAsync(string message);
 
+        Task SendToAsync(IRemoteConnection remote, string message);
+
         /// <summary>
         /// Closes the connection with the specified client.
         /// </summary>
         /// <param name="client">the client to disconnect with</param>
         /// <param name="justification">the justfication of the disconnection</param>
-        Task CloseConnectionAsync(IRemoteConnection client, string justification);
+        Task CloseConnectionAsync(IRemoteConnection client, string justification = null);
 
         /// <summary>
         /// Stops the server from listening.
         /// </summary>
-        void StopListening();
+        Task StopListening();
 
         #endregion
     }

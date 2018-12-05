@@ -1,303 +1,243 @@
 ﻿namespace NetworKit.Tcp
 {
-    using NetworKit.Exceptions;
     using NetworKit.Tcp.Utils;
     using System;
+    using System.Collections;
+    using System.Collections.Concurrent;
     using System.Collections.Generic;
-    using System.Collections.ObjectModel;
-    using System.Diagnostics;
     using System.Linq;
     using System.Net;
     using System.Net.Sockets;
     using System.Threading.Tasks;
+    using System.Timers;
 
     public class TcpNetworkServer : INetworkServer
     {
-        #region properties
+        #region fields
 
-        public bool IsListening { get { return this.Listener.Server.IsBound; } }
+        private readonly Timer _timer;
+        private readonly ConcurrentDictionary<IRemoteConnection, TcpRemoteConnection> _clients;
 
-        public int Port { get { return (this.Listener.LocalEndpoint as IPEndPoint).Port; } }
-
-        public IEnumerable<IRemoteConnection> Clients { get; }
-
-        public TcpConfiguration TcpConfiguration { get; }
+        private TcpListener _listener;
 
         #endregion
 
-        #region private properties
+        #region properties
 
-        /// <summary>
-        /// The internal tcp listener used to exchange package
-        /// </summary>
-        private TcpListener Listener { get; }
+        public bool IsListening { get { return _timer.Enabled; } }
 
-        /// <summary>
-        /// The underlying list of TcpRemoteConnection
-        /// </summary>
-        private List<TcpRemoteConnection> TcpClients { get; }
+        public INetworkServerSettings Settings { get { return this.TcpSettings; } }
+        public TcpNetworkServerSettings TcpSettings { get; }
 
-        /// <summary>
-        /// The delegate executed when a connection request arrives
-        /// </summary>
-        private ConnectionHandler OnConnectionRequested { get; set; }
-
-        /// <summary>
-        /// The delegate executed when a new message is received
-        /// </summary>
-        private MessageHandler OnMessageReceived { get; set; }
-
-        /// <summary>
-        /// The delegate executed when a remote is disconnected
-        /// </summary>
-        private DisconnectionHandler OnDisconnect { get; set; }
+        public IReadOnlyCollection<IRemoteConnection> Clients { get; }
 
         #endregion
 
         #region constructors
 
-        public TcpNetworkServer(int port)
+        public TcpNetworkServer(INetworkServerMessageHandler handler)
         {
-            this.Listener = new TcpListener(IPAddress.Any, port);
-            this.TcpClients = new List<TcpRemoteConnection>();
-            this.TcpConfiguration = new TcpConfiguration();
-            this.Clients = new ReadOnlyCollection<TcpRemoteConnection>(this.TcpClients);
+            if (handler == null)
+            {
+                throw new ArgumentNullException(nameof(handler));
+            }
+
+            _timer = new Timer();
+            _timer.AutoReset = true;
+            _timer.Elapsed += this.Tick;
+
+            _clients = new ConcurrentDictionary<IRemoteConnection, TcpRemoteConnection>();
+
+            this.Clients = new MyReadOnlyCollection(_clients);
+            this.TcpSettings = new TcpNetworkServerSettings { Handler = handler };
         }
 
         #endregion
 
-        #region methods
+        #region public methods
 
-        public Task StartListeningAsync(ConnectionHandler onConnectionRequested, MessageHandler onMessageReceived, DisconnectionHandler onDisconnect)
+        public async void StartListening(Func<IRemoteConnection, string, ConnectionStatus> validateConnection = null)
         {
-            if (this.IsListening)
+            _listener = new TcpListener(IPAddress.Any, this.Settings.LocalPort);
+            _listener.Start();
+
+            _timer.Enabled = true;
+
+            while (true)
             {
-                throw new AlreadyListeningException();
+                try
+                {
+                    // Accepts Tcp Connection
+                    var client = await _listener.AcceptTcpClientAsync();
+
+                    this.ValidateNewConnection(client, validateConnection);
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The server has been stopped. Nothing to do except leave the loop.
+                    return;
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine("---------------------- Error while listening new connections");
+                    Console.WriteLine(e.StackTrace);
+                }
             }
-
-            this.OnConnectionRequested = onConnectionRequested;
-            this.OnMessageReceived = onMessageReceived;
-            this.OnDisconnect = onDisconnect;
-
-            return Task.WhenAll(this.ListeningConnectionAsync(), this.ListeningMessageAsync());
         }
 
         public async Task BroadcastAsync(string message)
         {
-            var currentClients = this.TcpClients.ToList();
-            var broadcasting = new List<Task>(currentClients.Count);
+            var clients = _clients.Values;
 
-            foreach (var remote in currentClients)
+            var sending = new List<Task>(clients.Count);
+
+            foreach(var client in clients)
             {
-                broadcasting.Add(remote.SendAsync(message));
+                sending.Add(this.SendToAsync(client, message));
             }
 
-            await Task.WhenAll(broadcasting);
+            await Task.WhenAll(sending);
         }
 
-        public async Task CloseConnectionAsync(IRemoteConnection client, string justification)
+        public async Task SendToAsync(IRemoteConnection remote, string message)
         {
-            if (this.TcpClients.Contains(client))
+            TcpRemoteConnection tcpRemote;
+
+            if (!_clients.TryGetValue(remote, out tcpRemote))
             {
-                var tcpRemote = (client as TcpRemoteConnection);
+                throw new Exception("This remote is not connected to the server");
+            }
 
-                await tcpRemote.SendAsync(new Message(NetworkCommand.Disconnected, justification));
-
-                this.RemoveClient(tcpRemote, justification);
+            try
+            {
+                await tcpRemote.SendAsync(new TcpMessage(TcpNetworkCommand.Message, message));
+            }
+            catch(Exception e)
+            {
+                // TODO : log exception ??
+                this.TcpSettings.Handler?.OnClientDisconnection(remote, "ConnectionLost");
             }
         }
 
-        public void StopListening()
+        public async Task CloseConnectionAsync(IRemoteConnection remote, string justification = null)
         {
-            this.Listener.Stop();
+            TcpRemoteConnection tcpRemote;
 
-            this.ResetConnections();
+            if (!_clients.TryRemove(remote, out tcpRemote))
+            {
+                throw new Exception("This remote is not connected to the server");
+            }
+
+            await tcpRemote.SendAsync(new TcpMessage(TcpNetworkCommand.Disconnection, justification));
+
+            this.TcpSettings.Handler?.OnClientDisconnection(remote, "ConnectionLost");
         }
 
-        #endregion
-
-        #region internal methods
-
-        /// <summary>
-        /// Removes the specified client from the list of <see cref="Clients"/>. Also disposes the underlying TcpClient instance.
-        /// </summary>
-        /// <param name="client">The client to remove</param>
-        /// <param name="justification">The justification sent by the client</param>
-        internal void RemoveClient(TcpRemoteConnection client, string justification)
+        public async Task StopListening()
         {
-            this.TcpClients.Remove(client);
+            _listener.Stop();
+            _timer.Enabled = false;
 
-            client.Dispose();
-
-            this.OnDisconnect?.Invoke(client, justification);
+            await Task.WhenAll(_clients.Keys.Select(client => this.CloseConnectionAsync(client, "Server closed")));
+            
+            _clients.Clear();
         }
 
         #endregion
 
         #region private methods
 
-        /// <summary>
-        /// Listens for new connection request
-        /// </summary>
-        private async Task ListeningConnectionAsync()
+        private async void ValidateNewConnection(TcpClient client, Func<IRemoteConnection, string, ConnectionStatus> validateConnection)
         {
-            this.Listener.Start();
+            var remote = new TcpRemoteConnection(client, this.TcpSettings);
 
-            while (true)
-            {
-                try
-                {
-                    var client = await this.Listener.AcceptTcpClientAsync();
-
-                    this.ValidateConnectionAsync(client);
-                }
-                catch (Exception e)
-                {
-                    if(!this.IsListening)
-                    {
-                        // the tcp listener has been stopped, we don't need to throw an exception in that case
-                        break;
-                    }
-                    else
-                    {
-                        // TODO : log exception
-                    }
-                }
-            }
-        }
-
-        /// <summary>
-        /// Wait for the connection request, and execute the <see cref="OnConnectionRequested"/> delegate when it arrives
-        /// </summary>
-        /// <param name="remoteConnection"></param>
-        private async Task ValidateConnectionAsync(TcpClient client)
-        {
             try
             {
-                var remote = new TcpRemoteConnection(client, this);
+                // Waits for the connection request
+                var request = await remote.ReceiveAsync(this.TcpSettings.ConnectionTimeout);
 
-                Message request = null;
-
-                var chrono = Stopwatch.StartNew();
-
-                while (request == null)
+                if (request == null)
                 {
-                    if (chrono.ElapsedMilliseconds > this.TcpConfiguration.ConnectionTimeout)
-                    {
-                        Message response = new Message(NetworkCommand.ConnectionFailed, "The connection request takes to long.");
-
-                        await remote.SendAsync(response);
-
-                        remote.Dispose();
-
-                        return;
-                    }
-
-                    request = await remote.ReceiveAsync();
-
-                    if (request == null)
-                    {
-                        await Task.Delay(this.TcpConfiguration.ListeningTick);
-                    }
+                    // TODO: specify timeout reason
+                    await remote.SendAsync(new TcpMessage(TcpNetworkCommand.ConnectionDenied));
+                    remote.Dispose();
+                    return;
+                }
+                else if (!request.IsValid || request.Command != TcpNetworkCommand.ConnectionRequest)
+                {
+                    // TODO: specify wrong request reason
+                    await remote.SendAsync(new TcpMessage(TcpNetworkCommand.ConnectionDenied));
+                    remote.Dispose();
+                    return;
                 }
 
-                if (request.IsValid && request.Command == NetworkCommand.ConnectionRequested)
+                var status = validateConnection?.Invoke(remote, request.InnerMessage);
+
+                if (status?.ConnectionGranted ?? true)
                 {
-                    string responseStr = null;
+                    await remote.SendAsync(new TcpMessage(TcpNetworkCommand.ConnectionGranted, status?.Status));
 
-                    var success = this.OnConnectionRequested?.Invoke(remote, request.InnerMessage, out responseStr) ?? true;
-
-                    Message response = new Message(success ? NetworkCommand.ConnectionGranted : NetworkCommand.ConnectionFailed, responseStr);
-
-                    await remote.SendAsync(response);
-
-                    if (success)
-                    {
-                        this.TcpClients.Add(remote);
-                        //log.Debug("Connection Granted");
-                    }
-                    else
-                    {
-                        remote.Dispose();
-                        //log.Debug("Connection Refused");
-                    }
+                    _clients[remote] = remote;
+                    this.TcpSettings.Handler?.OnNewConnection(remote, request.InnerMessage);
                 }
                 else
                 {
-                    Message response = new Message(NetworkCommand.ConnectionFailed, "The connection request is not in the valid format or with the expected command.");
-
-                    await remote.SendAsync(response);
+                    // TODO: specify connection denied
+                    await remote.SendAsync(new TcpMessage(TcpNetworkCommand.ConnectionDenied));
                     remote.Dispose();
-
-                    //log.Debug("Connection Request Invalid");
+                    return;
                 }
             }
             catch (Exception e)
             {
-                //log.Error(e);
-            }
-            finally
-            {
-                //log.DebugFormat("Validation of {0}:{1} finished", remote.IPAddress, remote.Port);
-            }
-        }
-
-        /// <summary>
-        /// Listens for new incomming message and execute the <see cref="OnMessageReceived"/> delegate
-        /// </summary>
-        private async Task ListeningMessageAsync()
-        {
-            while (this.IsListening)
-            {
-                try
-                {
-                    var disconnectedRemotes = new Dictionary<TcpRemoteConnection, string>();
-
-                    var currentClients = this.TcpClients.ToList();
-
-                    foreach (var remote in currentClients)
-                    {
-                        for (var message = await remote.ReceiveAsync(); message != null; message = await remote.ReceiveAsync())
-                        {
-                            if (message.IsValid && message.Command == NetworkCommand.Message)
-                            {
-                                this.OnMessageReceived?.Invoke(remote, message.InnerMessage);
-                            }
-                            else if (message.IsValid && message.Command == NetworkCommand.Disconnection)
-                            {
-                                disconnectedRemotes.Add(remote, message.InnerMessage);
-                            }
-                        }
-                    }
-
-                    foreach (var remote in disconnectedRemotes)
-                    {
-                        remote.Key.SendAsync(new Message(NetworkCommand.Disconnected, null));
-
-                        this.RemoveClient(remote.Key, remote.Value);
-                    }
-
-                    await Task.Delay(this.TcpConfiguration.ListeningTick);
-                }
-                catch (Exception e)
-                {
-                    // TODO : log exception
-                }
-            }
-
-        }
-
-        /// <summary>
-        /// Close all the remote connected and clear the list
-        /// </summary>
-        private void ResetConnections()
-        {
-            foreach (var remote in this.TcpClients)
-            {
+                Console.WriteLine("---------------------- Error while validating a new connection");
+                Console.WriteLine(e.StackTrace);
+                // TODO: specify connection error
+                await remote.SendAsync(new TcpMessage(TcpNetworkCommand.ConnectionDenied));
                 remote.Dispose();
             }
+        }
 
-            this.TcpClients.Clear();
+        private async void Tick(object sender, ElapsedEventArgs e)
+        {
+            var receiving = _clients.Values.Select(c => this.ReadClientMessages(c));
+
+            await Task.WhenAll(receiving);
+        }
+
+        private async Task ReadClientMessages(TcpRemoteConnection client)
+        {
+            try
+            {
+                for (var message = await client.ReceiveAsync(); message != null; message = await client.ReceiveAsync())
+                {
+                    if (message.IsValid && message.Command == TcpNetworkCommand.Message)
+                    {
+                        this.TcpSettings.Handler?.OnMessageReceived(client, message.InnerMessage);
+                    }
+                    else if (message.IsValid && message.Command == TcpNetworkCommand.Disconnection)
+                    {
+                        this.OnClientDisconnection(client, message.InnerMessage);
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("---------------------- Error while listening new messages within the server");
+                Console.WriteLine(ex.StackTrace);
+                // if connection lost : this.OnClientDisconnection("Connection lost");
+                // otherwise : do nothing
+            }
+        }
+
+        private void OnClientDisconnection(IRemoteConnection client, string justification)
+        {
+            TcpRemoteConnection tcpRemote;
+            _clients.TryRemove(client, out tcpRemote);
+            tcpRemote.Dispose();
+
+            this.TcpSettings.Handler?.OnClientDisconnection(client, justification);
         }
 
         #endregion
@@ -312,7 +252,7 @@
             {
                 if (disposing)
                 {
-                    this.StopListening();
+                    _timer.Dispose();
                 }
 
                 disposedValue = true;
@@ -322,6 +262,49 @@
         public void Dispose()
         {
             Dispose(true);
+        }
+
+        #endregion
+
+        #region private classes
+
+        private class MyReadOnlyCollection : IReadOnlyCollection<IRemoteConnection>
+        {
+            #region fields
+
+            private readonly ConcurrentDictionary<IRemoteConnection, TcpRemoteConnection> _innerCollection;
+
+            #endregion
+
+            #region properties
+
+            public int Count { get { return _innerCollection.Count; } }
+
+            #endregion
+
+            #region constructors
+
+            public MyReadOnlyCollection(ConcurrentDictionary<IRemoteConnection, TcpRemoteConnection> collection)
+            {
+                _innerCollection = collection;
+            }
+
+            #endregion
+
+            #region methods
+
+            public IEnumerator<IRemoteConnection> GetEnumerator()
+            {
+                return _innerCollection.Keys.GetEnumerator();
+            }
+
+            IEnumerator IEnumerable.GetEnumerator()
+            {
+                return this.GetEnumerator();
+            }
+
+            #endregion
+
         }
 
         #endregion

@@ -1,9 +1,9 @@
-﻿using NetworKit.Tcp;
-using System;
-using System.Threading.Tasks;
-
-namespace NetworKit.ChatExample.Server
+﻿namespace NetworKit.ChatExample.Server
 {
+    using NetworKit.MessageHandler.Delegate;
+    using NetworKit.Tcp;
+    using System;
+
     class Server
     {
         static INetworkServer NetworkServer;
@@ -34,9 +34,11 @@ namespace NetworKit.ChatExample.Server
 
                 Console.WriteLine();
 
-                using (NetworkServer = new TcpNetworkServer(port))
+                using (NetworkServer = new TcpNetworkServer(new NetworkServerDelegateMessageHandler(ConnectionRequested, ServerMessageReceived, ServerDisconnect)))
                 {
-                    NetworkServer.StartListeningAsync(ConnectionRequested, ServerMessageReceived, ServerDisconnect);
+                    NetworkServer.Settings.LocalPort = port;
+
+                    NetworkServer.StartListening((remote,request) => new ConnectionStatus(true, $"Welcome {remote.IPAddress}:{remote.Port}"));
 
                     Console.WriteLine("Server started! Press Q to stop the server.");
                     Console.WriteLine();
@@ -72,17 +74,13 @@ namespace NetworKit.ChatExample.Server
 
         #region delegates
 
-        private static bool ConnectionRequested(IRemoteConnection sender, string request, out string response)
+        private static async void ConnectionRequested(IRemoteConnection sender, string request)
         {
             var message = $"New connection from {sender.IPAddress}:{sender.Port} => {request}";
 
             Console.WriteLine(message);
 
-            NetworkServer.BroadcastAsync(message);
-
-            response = $"Welcome {sender.IPAddress}:{sender.Port}";
-
-            return true;
+            await NetworkServer.BroadcastAsync(message);
         }
 
         private static async void ServerMessageReceived(IRemoteConnection sender, string message)

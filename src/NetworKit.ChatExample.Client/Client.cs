@@ -1,12 +1,11 @@
-﻿using NetworKit.Tcp;
-using System;
-
-namespace NetworKit.ChatExample.Client
+﻿namespace NetworKit.ChatExample.Client
 {
+    using NetworKit.MessageHandler.Delegate;
+    using NetworKit.Tcp;
+    using System;
+
     class Client
     {
-        static INetworkClient NetworkClient;
-
         static void Main(string[] args)
         {
             try
@@ -33,9 +32,9 @@ namespace NetworKit.ChatExample.Client
 
                 Console.WriteLine();
 
-                using (NetworkClient = new TcpNetworkClient())
+                using (var networkClient = new TcpNetworkClient(new NetworkClientDelegateMessageHandler(MessageReceived, ServerDisconnectedReceived)))
                 {
-                    NetworkClient.ConnectAsync("127.0.0.1", port, MessageReceived, "Hello !").GetAwaiter().GetResult();
+                    networkClient.ConnectAsync("127.0.0.1", port, "Hello !").GetAwaiter().GetResult();
 
                     Console.WriteLine("Connection established. Press Q to stop the client.");
                     Console.WriteLine();
@@ -50,7 +49,7 @@ namespace NetworKit.ChatExample.Client
                         }
                         else
                         {
-                            NetworkClient.SendAsync(input).GetAwaiter().GetResult();
+                            networkClient.SendAsync(input).GetAwaiter().GetResult();
                         }
                     }
                 }
@@ -77,9 +76,14 @@ namespace NetworKit.ChatExample.Client
             }
         }
 
-        private static void MessageReceived(IRemoteConnection sender, string message)
+        private static void MessageReceived(string message)
         {
             Console.WriteLine(message);
+        }
+
+        private static void ServerDisconnectedReceived(string justification)
+        {
+            Console.WriteLine("You have been disconnected: " + justification);
         }
     }
 }

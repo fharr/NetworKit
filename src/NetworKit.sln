@@ -13,7 +13,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "NetworKit.Tcp", "NetworKit.
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Examples", "Examples", "{1CAA9929-0D52-4B37-B6ED-6D67B023125D}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "NetworKit.ChatExample.Server", "NetworKit.Example\NetworKit.ChatExample.Server.csproj", "{B3779F9B-B707-4EEA-B695-E76BABBA932F}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "NetworKit.ChatExample.Server", "NetworKit.ChatExample.Server\NetworKit.ChatExample.Server.csproj", "{B3779F9B-B707-4EEA-B695-E76BABBA932F}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "NetworKit.ChatExample.Client", "NetworKit.ChatExample.Client\NetworKit.ChatExample.Client.csproj", "{F0AB0940-476C-4F7E-8987-3DE8E836AD5C}"
 EndProject

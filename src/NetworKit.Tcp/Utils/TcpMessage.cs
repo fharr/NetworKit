@@ -23,7 +23,7 @@
 
         private TcpMessage(string message)
         {
-            var index = message.IndexOf('|');
+            var index = message?.IndexOf('|') ?? -1;
 
             if (index == -1)
             {

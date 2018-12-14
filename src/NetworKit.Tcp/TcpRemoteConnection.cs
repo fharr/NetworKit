@@ -69,7 +69,7 @@
         {
             this.EnsureIsAliveAndConnected();
 
-            if (message.InnerMessage.Contains(_config.MessageSeparator))
+            if (message.InnerMessage?.Contains(_config.MessageSeparator) ?? false)
             {
                 throw new MessageSeparatorCollisionException(message.InnerMessage, _config.MessageSeparator);
             }

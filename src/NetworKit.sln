@@ -19,7 +19,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "NetworKit.ChatExample.Clien
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "NetworKit.Reactive", "NetworKit.Reactive\NetworKit.Reactive.csproj", "{C7C1D0CE-9BAF-41FC-9F76-C459C82F46E6}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetworKit.Tcp.Tests", "NetworKit.Tcp.Tests\NetworKit.Tcp.Tests.csproj", "{B2EC8D6C-7336-490B-BFC6-474A0C7083AC}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "NetworKit.Tcp.Tests", "NetworKit.Tcp.Tests\NetworKit.Tcp.Tests.csproj", "{B2EC8D6C-7336-490B-BFC6-474A0C7083AC}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

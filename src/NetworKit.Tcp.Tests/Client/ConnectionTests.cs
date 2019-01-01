@@ -15,8 +15,8 @@ namespace NetworKit.Tcp.Tests.Client
     {
         #region fields
 
-        private const int ListenerPort = 1337;
-        private const int TestedPort = 1338;
+        private const int ListenerPort = 1339;
+        private const int TestedPort = 1340;
 
         private INetworkClientMessageHandler _handler;
 
@@ -117,13 +117,13 @@ namespace NetworKit.Tcp.Tests.Client
 
             var e = await Assert.ThrowsAsync<ConnectionFailedException>(async () => await _tested.ConnectAsync("127.0.0.1", ListenerPort));
 
-            Assert.Equal(ConnectionFailedType.ConnectionImpossible, e.TypeErreur);
+            Assert.Equal(ConnectionFailedType.ConnectionRequestFailed, e.TypeErreur);
         }
 
         [Fact]
         public async Task TestConnectionTimeout()
         {
-            _tested.TcpSettings.ConnectionTimeout = 1000;
+            _tested.TcpSettings.ConnectionTimeout = 2000;
 
             var clientRequest = "Hello world";
 
@@ -137,9 +137,11 @@ namespace NetworKit.Tcp.Tests.Client
 
             chrono.Stop();
 
-            Assert.Equal(ConnectionFailedType.Timeout, e.TypeErreur);
+            Assert.Equal(ConnectionFailedType.ConnectionTimeout, e.TypeErreur);
             Assert.True(chrono.ElapsedMilliseconds > _tested.TcpSettings.ConnectionTimeout, $"The connection request timeout too quickly (Expected: { _tested.TcpSettings.ConnectionTimeout}, Actual: {chrono.ElapsedMilliseconds})");
-            Assert.True(chrono.ElapsedMilliseconds < _tested.TcpSettings.ConnectionTimeout + 1000, $"The connection request timeout too slowly (Expected: { _tested.TcpSettings.ConnectionTimeout}, Actual: {chrono.ElapsedMilliseconds})");
+            Assert.True(chrono.ElapsedMilliseconds < _tested.TcpSettings.ConnectionTimeout + 100, $"The connection request timeout too slowly (Expected: { _tested.TcpSettings.ConnectionTimeout}, Actual: {chrono.ElapsedMilliseconds})");
+
+            (await serverConnection).Close();
         }
 
         [Fact]
@@ -176,11 +178,11 @@ namespace NetworKit.Tcp.Tests.Client
 
             var clientConnection = _tested.ConnectAsync("127.0.0.1", ListenerPort, clientRequest);
 
-            using (var remote = new TcpRemoteConnection(await serverConnection, new TcpNetworkServerSettings { MessageEncoding = Encoding.ASCII }))
+            using (var remote = new TcpRemoteConnection(await serverConnection, new TcpNetworkServerSettings()))
             {
                 var serverResponse = "Hello test";
 
-                await remote.SendAsync(new TcpMessage(TcpNetworkCommand.Message, serverResponse));
+                await remote.SendAsync(new TcpMessage((TcpNetworkCommand)42, serverResponse));
 
                 var e = await Assert.ThrowsAsync<ConnectionFailedException>(async () => await clientConnection);
 

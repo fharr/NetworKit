@@ -60,14 +60,14 @@
 
     public enum ConnectionFailedType
     {
-        [Description("Your connection request timeout.")]
-        Timeout,
-        [Description("The server is not started or misconfigured.")]
-        ConnectionImpossible,
-        [Description("The connection has been refused by the server.")]
-        ConnectionRefused,
         [Description("The specified remote connection is not reachable.")]
         RemoteConnectionUnreachable,
+        [Description("The connection request failed.")]
+        ConnectionRequestFailed,
+        [Description("Your connection request timeout.")]
+        ConnectionTimeout,
+        [Description("The connection has been refused by the server.")]
+        ConnectionRefused,
         [Description("The response from the server was not at the expected format.")]
         InvalidResponse,
         [Description("An unexpected connection response has been received.")]

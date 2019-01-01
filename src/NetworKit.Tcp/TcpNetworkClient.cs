@@ -63,13 +63,25 @@
                 var response = await remote.ReceiveAsync(this.TcpSettings.ConnectionTimeout);
 
                 if (response == null)
-                    throw new ConnectionFailedException(ConnectionFailedType.Timeout);
+                {
+                    remote.Dispose();
+                    throw new ConnectionFailedException(ConnectionFailedType.ConnectionTimeout);
+                }
                 else if (!response.IsValid)
+                {
+                    remote.Dispose();
                     throw new ConnectionFailedException(ConnectionFailedType.InvalidResponse, response.InnerMessage);
+                }
                 else if (response.Command == TcpNetworkCommand.ConnectionDenied)
+                {
+                    remote.Dispose();
                     throw new ConnectionFailedException(ConnectionFailedType.ConnectionRefused, response.InnerMessage);
+                }
                 else if (response.Command != TcpNetworkCommand.ConnectionGranted)
+                {
+                    remote.Dispose();
                     throw new ConnectionFailedException(ConnectionFailedType.UnexpectedResponse, response.ToString());
+                }
 
                 _remoteServer = remote;
 
@@ -149,7 +161,8 @@
             }
             else if (connection.IsFaulted)
             {
-                throw new ConnectionFailedException(ConnectionFailedType.ConnectionImpossible, connection.Exception.InnerException);
+                client.Close();
+                throw new ConnectionFailedException(ConnectionFailedType.ConnectionRequestFailed, connection.Exception.InnerException);
             }
 
             return new TcpRemoteConnection(client, this.TcpSettings);

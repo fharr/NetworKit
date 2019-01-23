@@ -158,24 +158,9 @@ namespace NetworKit.Tcp.Tests
             TryCatchException(typeof(NotConnectedException), () => { var _ = _tested.IPAddress; }, "Can't access to the ip address if the connection is closed");
         }
 
-        [Fact]
-        public async Task TestConnectionLostOnReceive()
-        {
-            //Assert.Inconclusive("Not Implemented Yet");
-
-            //_tester.Close();
-
-            //// Detects the connection lost
-            //await TryCatchException(typeof(ConnectionLostException), async () => await _tested.ReceiveAsync(), "Can't send messages if the connection is lost");
-
-            //Assert.False(_tested.Connected, "The TcpRemoteConnection should not be connected");
-
-            //// Ensures the Not connected exception is thrown
-            //await TryCatchException(typeof(NotConnectedException), async () => await _tested.SendAsync(new TcpMessage(TcpNetworkCommand.None)), "Can't send messages if the connection is closed");
-            //await TryCatchException(typeof(NotConnectedException), async () => await _tested.ReceiveAsync(), "Can't receive messages if the connection is closed");
-            //TryCatchException(typeof(NotConnectedException), () => { var _ = _tested.Port; }, "Can't access to the port if the connection is closed");
-            //TryCatchException(typeof(NotConnectedException), () => { var _ = _tested.IPAddress; }, "Can't access to the ip address if the connection is closed");
-        }
+        [Fact(Skip = "Not Implemented Yet")]
+        public void TestConnectionLostOnReceive()
+        { }
 
         #region inner test methods
 

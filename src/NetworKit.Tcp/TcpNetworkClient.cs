@@ -106,7 +106,7 @@
 
         public async Task DisconnectAsync(string justification = null)
         {
-            this.IsAliveAndDisconnected();
+            this.IsAliveAndConnected();
 
             await _remoteServer.SendAsync(new TcpMessage(TcpNetworkCommand.Disconnection, justification));
 

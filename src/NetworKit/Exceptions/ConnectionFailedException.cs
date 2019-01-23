@@ -10,7 +10,7 @@
         /// <summary>
         /// The cause of the connection failure
         /// </summary>
-        public ConnectionFailedType TypeErreur { get; }
+        public ConnectionFailedType ErrorType { get; }
 
         public string ServerResponse { get; }
 
@@ -26,7 +26,7 @@
         public ConnectionFailedException(ConnectionFailedType cause, string response = null)
             : base(GetErrorMessage(cause))
         {
-            this.TypeErreur = cause;
+            this.ErrorType = cause;
             this.ServerResponse = response;
         }
 
@@ -39,7 +39,7 @@
         public ConnectionFailedException(ConnectionFailedType cause, Exception innerException, string response = null)
             : base(GetErrorMessage(cause), innerException)
         {
-            this.TypeErreur = cause;
+            this.ErrorType = cause;
             this.ServerResponse = response;
         }
 

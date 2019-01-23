@@ -18,8 +18,6 @@ namespace NetworKit.Tcp.Tests.Client
         private const int ListenerPort = 1339;
         private const int TestedPort = 1340;
 
-        private INetworkClientMessageHandler _handler;
-
         private TcpListener _listener;
         private TcpNetworkClient _tested;
 
@@ -32,9 +30,9 @@ namespace NetworKit.Tcp.Tests.Client
             _listener = new TcpListener(IPAddress.Any, ListenerPort);
             _listener.Start();
 
-            _handler = new NetworkClientQueueMessageHandler();
+            var handler = new NetworkClientQueueMessageHandler();
 
-            _tested = new TcpNetworkClient(_handler);
+            _tested = new TcpNetworkClient(handler);
             _tested.Settings.LocalPort = TestedPort;
         }
 
@@ -105,7 +103,7 @@ namespace NetworKit.Tcp.Tests.Client
 
             chrono.Stop();
 
-            Assert.Equal(ConnectionFailedType.RemoteConnectionUnreachable, e.TypeErreur);
+            Assert.Equal(ConnectionFailedType.RemoteConnectionUnreachable, e.ErrorType);
             Assert.True(chrono.ElapsedMilliseconds > _tested.TcpSettings.ConnectionTimeout, $"The connection request timeout too quickly (Expected: { _tested.TcpSettings.ConnectionTimeout}, Actual: {chrono.ElapsedMilliseconds})");
             Assert.True(chrono.ElapsedMilliseconds < _tested.TcpSettings.ConnectionTimeout + 500, $"The connection request timeout too slowly (Expected: { _tested.TcpSettings.ConnectionTimeout}, Actual: {chrono.ElapsedMilliseconds})");
         }
@@ -117,7 +115,7 @@ namespace NetworKit.Tcp.Tests.Client
 
             var e = await Assert.ThrowsAsync<ConnectionFailedException>(async () => await _tested.ConnectAsync("127.0.0.1", ListenerPort));
 
-            Assert.Equal(ConnectionFailedType.ConnectionRequestFailed, e.TypeErreur);
+            Assert.Equal(ConnectionFailedType.ConnectionRequestFailed, e.ErrorType);
         }
 
         [Fact]
@@ -137,7 +135,7 @@ namespace NetworKit.Tcp.Tests.Client
 
             chrono.Stop();
 
-            Assert.Equal(ConnectionFailedType.ConnectionTimeout, e.TypeErreur);
+            Assert.Equal(ConnectionFailedType.ConnectionTimeout, e.ErrorType);
             Assert.True(chrono.ElapsedMilliseconds > _tested.TcpSettings.ConnectionTimeout, $"The connection request timeout too quickly (Expected: { _tested.TcpSettings.ConnectionTimeout}, Actual: {chrono.ElapsedMilliseconds})");
             Assert.True(chrono.ElapsedMilliseconds < _tested.TcpSettings.ConnectionTimeout + 100, $"The connection request timeout too slowly (Expected: { _tested.TcpSettings.ConnectionTimeout}, Actual: {chrono.ElapsedMilliseconds})");
 
@@ -163,7 +161,7 @@ namespace NetworKit.Tcp.Tests.Client
 
                 var e = await Assert.ThrowsAsync<ConnectionFailedException>(async () => await clientConnection);
 
-                Assert.Equal(ConnectionFailedType.UnexpectedResponse, e.TypeErreur);
+                Assert.Equal(ConnectionFailedType.UnexpectedResponse, e.ErrorType);
             }
         }
 
@@ -186,7 +184,7 @@ namespace NetworKit.Tcp.Tests.Client
 
                 var e = await Assert.ThrowsAsync<ConnectionFailedException>(async () => await clientConnection);
 
-                Assert.Equal(ConnectionFailedType.InvalidResponse, e.TypeErreur);
+                Assert.Equal(ConnectionFailedType.InvalidResponse, e.ErrorType);
             }
         }
     }
